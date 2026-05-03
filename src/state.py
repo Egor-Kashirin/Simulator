@@ -1,0 +1,15 @@
+from dataclasses import dataclass
+
+@dataclass
+class NodeState:
+    name: str              # идентификатор элемента ("well_1", "shlyf", "dcs")
+    P_in: float            # давление на входе [атм]
+    P_out: float           # давление на выходе [атм]
+    dP: float              # перепад давления [атм]
+    q_std: float           # коммерческий расход [ст.м³/сут]
+    q_res: float | None = None    # объёмный расход при местных условиях [м³/сут]
+    v: float | None = None        # скорость потока [м/с]
+    rho: float | None = None      # плотность газа [кг/м³]
+
+    def __repr__(self) -> str:
+        return f"NodeState({self.name}: P={self.P_in:.2f}→{self.P_out:.2f}, q={self.q_std:.0f})"
