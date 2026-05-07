@@ -15,7 +15,7 @@ class Well:
         self.pipe = pipe
 
     def q(self, P_res: float, P_bhp: float) -> float:
-        """Расчет дебита по закону Дарси (IPR)"""
+
         if P_res <= P_bhp:
             return 0.0
         mu = self.fluid.mu(P_res)

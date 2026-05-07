@@ -71,10 +71,6 @@ class Pipe:
         )
 
     def get_vlp(self, P_man: float, q_values: list) -> tuple[list, list]:
-        """
-        Построение кривой VLP: P_bhp(q) при фиксированном давлении на манифольде.
-        Формула: P_bhp = P_man + ΔP_hydrostatic + ΔP_friction
-        """
         qs = []
         pbhps = []
 
