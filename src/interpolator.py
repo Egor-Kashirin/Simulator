@@ -1,20 +1,24 @@
 class LinearInterpolator:
-    def __init__(self, xs: list[float], ys: list[float]):
-        if len(xs) != len(ys):
-            raise ValueError("xs и ys должны быть одинаковой длины")
-        if any(xs[i] > xs[i + 1] for i in range(len(xs) - 1)):
-            raise ValueError("xs должен быть отсортирован по возрастанию")
-        self.xs = xs
-        self.ys = ys
+    def __init__(self, x, y):
+        if len(x) != len(y):
+            raise ValueError("Разная длина списков")
+        self.x = list(x)
+        self.y = list(y)
 
-    def predict(self, xp: float) -> float:
-        if xp < self.xs[0] or xp > self.xs[-1]:
-            raise ValueError(f"Значение {xp} вне диапазона [{self.xs[0]}, {self.xs[-1]}]")
+    def predict(self, xp):
+        if xp == self.x[-1]:
+            x0, x1 = self.x[-2], self.x[-1]
+            y0, y1 = self.y[-2], self.y[-1]
+            k = (y1 - y0) / (x1 - x0)
+            return y1 + k * (xp - x1)
 
-        for i in range(len(self.xs) - 1):
-            if self.xs[i] <= xp <= self.xs[i + 1]:
-                x0, x1 = self.xs[i], self.xs[i + 1]
-                y0, y1 = self.ys[i], self.ys[i + 1]
-                return y0 + (y1 - y0) * (xp - x0) / (x1 - x0)
+        for i in range(len(self.x) - 1):
+            if self.x[i] <= xp < self.x[i + 1]:
+                x0, x1 = self.x[i], self.x[i + 1]
+                y0, y1 = self.y[i], self.y[i + 1]
+                k = (y1 - y0) / (x1 - x0)
+                return y0 + k * (xp - x0)
 
-        return self.ys[-1]
+        if xp < self.x[0]:
+            return self.y[0]
+        return self.y[-1]

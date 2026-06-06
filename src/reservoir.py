@@ -1,40 +1,23 @@
-class ReservoirProperties:
-    """
-    Контейнер для статических параметров пласта.
-    """
-    def __init__(self, P: float, T: float, phi: float, h: float, A: float):
-        """
-        Параметры
-        ----------
-        P : float
-            Начальное пластовое давление [атм].
-        T : float
-            Температура пласта [К].
-        phi : float
-            Пористость (доля, 0..1).
-        h : float
-            Эффективная толщина пласта [м].
-        A : float
-            Площадь дренажа [м²].
-        """
-        self.P = P
-        self.T = T
-        self.phi = phi
-        self.h = h
-        self.A = A
-
+import math
 
 class Reservoir:
-    """
-    Модель пласта. Хранит свойства и предоставляет методы для расчёта объёмов.
-    """
-    def __init__(self, props: ReservoirProperties):
-        self.resprops = props
+    def __init__(self, k, h, re, rw, P_res, beta=0.00852702):
+        self.k = k
+        self.h = h
+        self.re = re
+        self.rw = rw
+        self.P_res = P_res
+        self.beta = beta
 
-    def pore_volume(self) -> float:
-        """Объём порового пространства, м³"""
-        return self.resprops.A * self.resprops.h * self.resprops.phi
+    def get_productivity_index(self, mu_cP):
+        return (self.beta * self.k * self.h) / (mu_cP * math.log(self.re / self.rw))
 
-    def update_pressure(self, P_new: float):
-        """Обновление пластового давления (для материального баланса)"""
-        self.resprops.P = P_new
+    def get_ipr_linear(self, P_bhp, C):
+        if P_bhp >= self.P_res:
+            return 0.0
+        return max(0, C * (self.P_res - P_bhp))
+
+    def get_ipr_square(self, P_bhp, C):
+        if P_bhp >= self.P_res:
+            return 0.0
+        return max(0, C * (self.P_res ** 2 - P_bhp ** 2))

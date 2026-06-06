@@ -1,48 +1,33 @@
-import math
-from src.fluid import Fluid
-from src.pipe import Pipe
-
-BETA = 0.00852702
+import numpy as np
 
 
-class Well:
-    def __init__(self, fluid: Fluid, k: float, h: float, re: float, rw: float, pipe: Pipe = None):
-        self.fluid = fluid
-        self.k = k
-        self.h = h
-        self.re = re
-        self.rw = rw
-        self.pipe = pipe
+class Pipe:
+    def __init__(self, D, roughness):
+        self.D = D
+        self.roughness = roughness
 
-    def q(self, P_res: float, P_bhp: float) -> float:
+    def _get_lambda(self, Re):
+        if Re < 2300:
+            return 64.0 / Re
 
-        if P_res <= P_bhp:
-            return 0.0
-        mu = self.fluid.mu(P_res)
-        if mu <= 0 or self.rw <= 0 or self.re <= self.rw:
-            return 0.0
-        ln_ratio = math.log(self.re / self.rw)
-        C = (BETA * self.k * self.h) / (mu * ln_ratio)
-        return C * (P_res - P_bhp)
+        rel_rough = self.roughness / self.D
+        lam = 0.02
+        for _ in range(50):
+            rhs = -2.0 * np.log10(rel_rough / 3.7 + 2.51 / (Re * np.sqrt(lam)))
+            lam_new = 1.0 / rhs ** 2
+            if abs(lam_new - lam) < 1e-8:
+                break
+            lam = lam_new
+        return lam
 
-    def get_ipr_curve(self, P_res: float, n_points: int = 20) -> list:
-        """Генерация точек кривой IPR: (P_bhp, q)"""
-        curve = []
-        for i in range(n_points + 1):
-            P_bhp = P_res * (1.0 - i / n_points)
-            curve.append((P_bhp, self.q(P_res, P_bhp)))
-        return curve
+    def calculate_dP(self, q, L, rho, mu_Pas, Bg, T=310.0):
+        Q = q / (24 * 3600) * Bg
+        A = np.pi * self.D ** 2 / 4
+        v = Q / A
 
-    def get_vlp_curve(self, P_man: float, max_q: float = 1500.0, n_points: int = 20) -> list:
-        """Генерация точек кривой VLP: (P_bhp, q) через трубу"""
-        if self.pipe is None:
-            raise ValueError("Pipe object is required for VLP")
+        Re = rho * v * self.D / mu_Pas if mu_Pas > 0 else 1e6
 
-        curve = []
-        for i in range(n_points + 1):
-            q_val = max_q * (i / n_points)
-            # Считаем перепад в трубе для данного дебита
-            node = self.pipe.dp(P_man, q_val)
-            # P_bhp = P_man + потери
-            curve.append((P_man + node.dP, q_val))
-        return curve
+        lam = self._get_lambda(Re)
+
+        dP = lam * (L / self.D) * (rho * v ** 2 / 2) / 101325
+        return dP

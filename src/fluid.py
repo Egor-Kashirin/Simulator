@@ -1,213 +1,98 @@
-import math
+import numpy as np
+import pandas as pd
 from src.interpolator import LinearInterpolator
 
+
 class Fluid:
-    """
-    Класс для расчёта свойств природного газа по методике GERG-91 мод.
-    (ГОСТ 30319.2-96, раздел 3.2.3)
-    """
+    Pstd = 1
+    Tstd = 293.15
+    R = 0.00831451
 
-    R = 8.314  # универсальная газовая постоянная
-
-    # Стандартные условия
-    P_std = 101325.0 # стандартное давление, Па
-    T_std = 293.15 # стандартная температура, K
-    P_std_atm = 1.0 # стандартное давление атмосферное, атм
-
-    def __init__(self, M: float, rho_c: float, xa: float, xy: float, T: float):
-        """
-        Параметры
-        ----------
-        M : float
-            Молярная масса газа, кг/кмоль (или г/моль).
-        rho_c : float
-            Плотность газа в стандартных условиях, кг/м³.
-        xa : float
-            Мольная доля азота (N₂), доля единицы (не проценты!).
-        xy : float
-            Мольная доля диоксида углерода (CO₂), доля единицы.
-        T : float
-            Температура системы, К (фиксированная для всех расчётов).
-        """
-        self.M = M
+    def __init__(self, rho_c: float, xa: float, xy: float):
         self.rho_c = rho_c
-        self.xa = xa
-        self.xy = xy
-        self.T = T
-        self._mu_interpolator = None # интерполятор для вязкости
+        self.xa = xa / 100
+        self.xy = xy / 100
+        self.M = 16.04
 
-    def z(self, P: float) -> float:
-        """
-        Рассчитать коэффициент сверхсжимаемости Z
+    def get_Z(self, P: float, T: float) -> float:
+        P_mpa = P * 0.101325
+        xa = self.xa
+        xy = self.xy
+        xz = 1 - xa - xy
 
-        Параметры
-        ----------
-        P : float
-            Давление, атм.
+        z_c = 1 - (0.0741 * self.rho_c - 0.006 - 0.063 * xa - 0.0575 * xy) ** 2
+        M3 = (24.05525 * z_c * self.rho_c - 28.0135 * xa - 44.01 * xy) / xz
+        H = 128.64 + 47.479 * M3
 
-        Возвращает
-        ----------
-        float
-            Коэффициент сверхсжимаемости Z.
-        """
-        return self._calculate_Z(P, self.T)
-
-    def ro(self, P: float) -> float:
-        """
-        Рассчитать плотность газа.
-
-        ρ = P * M / (Z * R * T)
-
-        Параметры
-        ----------
-        P : float
-            Давление, атм.
-
-        Возвращает
-        ----------
-        float
-            Плотность, кг/м³.
-        """
-        P_pa = P * 101325.0 # давление в Па
-        Z = self.z(P)
-
-        # self.R * 1000 - R = 8.314 Дж/(моль·К) * 1000 = 8314 Дж/(кмоль·К)
-        rho = (P_pa * self.M) / (Z * self.R * 1000 * self.T)
-        return rho
-
-    def bg(self, P: float) -> float:
-        """
-        Рассчитать объёмный коэффициент расширения газа
-
-        Bg = (P_std * Z * T) / (P * Z_std * T_std)
-        При Z_std ≈ 1:
-        Bg = (P_std * Z * T) / (P * T_std)
-
-        Параметры
-        ----------
-        P : float
-            Давление, атм.
-
-        Возвращает
-        ----------
-        float
-            Объёмный коэффициент Bg, м³/ст.м³.
-        """
-        Z = self.z(P)
-        Bg = (self.P_std_atm * Z * self.T) / (P * self.T_std)
-        return Bg
-
-    def mu(self, P: float) -> float:
-        """
-        Рассчитать динамическую вязкость газа через интерполяцию
-
-        Параметры
-        ----------
-        P : float
-            Давление, атм.
-
-        Возвращает
-        ----------
-        float
-            Вязкость, сП (сантипуаз).
-        """
-        # если интерполятор не инициализирован или P вне диапазона - выбрасываем ошибку
-        if self._mu_interpolator is None:
-            raise RuntimeError(
-                "Интерполятор вязкости не инициализирован. "
-                "Вызовите set_viscosity_data() перед расчётом mu()."
-            )
-
-        return self._mu_interpolator.predict(P)
-
-    def set_viscosity_data(self, pressures: list, viscosities: list):
-        """
-        Инициализировать интерполятор вязкости.
-
-        Параметры
-        ----------
-        pressures : list
-            Список давлений [атм], отсортированный по возрастанию.
-        viscosities : list
-            Список значений вязкости [сП].
-        """
-        self._mu_interpolator = LinearInterpolator(pressures, viscosities)
-
-    def _calculate_Z(self, P: float, T: float) -> float:
-        """
-        Внутренний метод расчёта Z по GERG-91 мод.
-        (ГОСТ 30319.2-96, раздел 3.2.3)
-        """
-        M_CH4 = 16.04 # молярная масса метана, кг/кмоль
-        M_N2 = 28.0135 # молярная масса азота, кг/кмоль
-        M_CO2 = 44.01 # молярная масса диоксида углерода, кг/кмоль
-        R = 0.008314 # газовая постоянная, МПа·м³/(кмоль·К)
-        P_mpa = P * 0.101325 # перевод давления в МПа
-        xe = 1.0 - self.xa - self.xy # мольная доля эквивалентного углеводорода
-
-        # Сжимаемость при стандартных условиях (формула из ГОСТ)
-        z_c = 1.0 - (0.0741 * self.rho_c - 0.006 - 0.063 * self.xa - 0.0575 * self.xy) ** 2
-
-        # Молярная масса эквивалентного углеводорода
-        if xe > 1e-10:  # защита от деления на ноль
-            M3 = (24.05525 * z_c * self.rho_c - 28.0135 * self.xa - 44.01 * self.xy) / xe
-        else:
-            M3 = M_CH4
-
-        H = 128.64 + 47.479 * M3 # расчет H по формуле 34
-
-        # Коэффициенты B (формулы 23-26, 32)
-        B1 = (-0.425468 + 2.865e-3 * T - 4.62073e-6 * T ** 2
-              + (8.77118e-4 - 5.56281e-6 * T + 8.81514e-9 * T ** 2) * H
-              + (-8.24747e-7 + 4.31436e-9 * T - 6.08319e-12 * T ** 2) * H ** 2)
+        B1 = (-0.425468 + 2.865e-3 * T - 4.62073e-6 * T ** 2 +
+              (8.77118e-4 - 5.56281e-6 * T + 8.8151e-9 * T ** 2) * H +
+              (-8.24747e-7 + 4.31436e-9 * T - 6.08319e-12 * T ** 2) * H ** 2)
         B2 = -0.1446 + 7.4091e-4 * T - 9.1195e-7 * T ** 2
         B23 = -0.339693 + 1.61176e-3 * T - 2.04429e-6 * T ** 2
         B3 = -0.86834 + 4.0376e-3 * T - 5.1657e-6 * T ** 2
-        B_ = 0.72 + 1.875e-5 * (320 - T) ** 2
 
-        # Коэффициенты C (формулы 27-31, 33)
-        C1 = (-0.302488 + 1.95861e-3 * T - 3.16302e-6 * T ** 2
-              + (6.46422e-4 - 4.22876e-6 * T + 6.88157e-9 * T ** 2) * H
-              + (-3.32805e-7 + 2.2316e-9 * T - 3.67713e-12 * T ** 2) * H ** 2)
+        C1 = (-0.302488 + 1.95861e-3 * T - 3.16302e-6 * T ** 2 +
+              (6.46422e-4 - 4.22876e-6 * T + 6.88157e-9 * T ** 2) * H +
+              (-3.32805e-7 + 2.2316e-9 * T - 3.67713e-12 * T ** 2) * H ** 2)
         C2 = 7.8498e-3 - 3.9895e-5 * T + 6.1187e-8 * T ** 2
         C3 = 2.0513e-3 + 3.4888e-5 * T - 8.3703e-8 * T ** 2
         C223 = 5.52066e-3 - 1.68609e-5 * T + 1.57169e-8 * T ** 2
         C233 = 3.58783e-3 + 8.06674e-6 * T - 3.25798e-8 * T ** 2
-        C_ = 0.92 + 0.0013 * (T - 270)
 
-        # коэффициенты Bm и Cm
-        Bm = (xe ** 2 * B1
-              + xe * self.xa * B_ * (B1 + B2)
-              - 1.73 * xe * self.xy * math.sqrt(B1 * B3)
-              + self.xa ** 2 * B2
-              + 2 * self.xa * self.xy * B23
-              + self.xy ** 2 * B3)
+        B_star = 0.72 + 1.875e-5 * (320 - T) ** 2
+        C_star = 0.92 + 0.0013 * (T - 270)
 
-        Cm = (xe ** 3 * C1
-              + 3 * xe ** 2 * self.xa * C_ * (C1 ** 2 * C2) ** (1 / 3)
-              + 2.76 * xe ** 2 * self.xy * (C1 ** 2 * C3) ** (1 / 3)
-              + 3 * xe * self.xa ** 2 * C_ * (C1 * C2 ** 2) ** (1 / 3)
-              + 6.6 * xe * self.xa * self.xy * (C1 * C2 * C3) ** (1 / 3)
-              + 2.76 * xe * self.xy ** 2 * (C1 * C3 ** 2) ** (1 / 3)
-              + self.xa ** 3 * C2
-              + 3 * self.xa ** 2 * self.xy * C223
-              + 3 * self.xa * self.xy ** 2 * C233
-              + self.xy ** 3 * C3)
+        Bm = (xz ** 2 * B1 + xz * xa * B_star * (B1 + B2) -
+              1.73 * xz * xy * (B1 * B3) ** 0.5 + xa ** 2 * B2 +
+              2 * xa * xy * B23 + xy ** 2 * B3)
+        Cm = (xz ** 3 * C1 +
+              3 * xz ** 2 * xa * C_star * (C1 ** 2 * C2) ** (1 / 3) +
+              2.76 * xz ** 2 * xy * (C1 ** 2 * C3) ** (1 / 3) +
+              3 * xz * xa ** 2 * C_star * (C1 * C2 ** 2) ** (1 / 3) +
+              6.6 * xz * xa * xy * (C1 * C2 * C3) ** (1 / 3) +
+              2.76 * xz * xy ** 2 * (C1 * C3 ** 2) ** (1 / 3) +
+              xa ** 3 * C2 +
+              3 * xa ** 2 * xy * C223 +
+              3 * xa * xy ** 2 * C233 +
+              xy ** 3 * C3)
 
-        # коэффициент сжимаемости Z по формуле 19
-        b = 1e3 * P_mpa / (2.7715 * T)
-
-        # фактор сжимаемости при стандартных условиях
-        B0 = b * Bm
+        b = 1000 * P_mpa / (2.7715 * T)
         C0 = b ** 2 * Cm
+        B0 = b * Bm
         A1 = 1 + B0
         A0 = 1 + 1.5 * (B0 + C0)
+        A2 = (A0 - (A0 ** 2 - A1 ** 3) ** 0.5) ** (1 / 3)
+        z = (1 + A2 + A1 / A2) / 3
+        return z
 
-        # защита от отрицательного подкоренного выражения
-        discriminant = A0 ** 2 - A1 ** 3
-        if discriminant < 0:
-            discriminant = 0
+    def get_Bg(self, P: float, T: float) -> float:
+        Z = self.get_Z(P, T)
+        Bg = (self.Pstd * Z * T) / (P * self.Tstd)
+        return Bg
 
-        A2 = (A0 - math.sqrt(discriminant)) ** (1 / 3)
-        Z = (1 + A2 + A1 / A2) / 3
-        return Z
+
+def load_pvt_data(csv_path: str, rho_c: float, xa: float, xy: float, T: float):
+    df = pd.read_csv(csv_path, sep=';')
+
+    fluid = Fluid(rho_c=rho_c, xa=xa, xy=xy)
+
+    col_pressure = [c for c in df.columns if 'pressure' in c.lower()][0]
+    col_viscosity = [c for c in df.columns if 'viscosity' in c.lower() or 'mu' in c.lower()][0]
+
+    if 'Z' not in df.columns and 'z' not in df.columns:
+        df['Z'] = df[col_pressure].apply(lambda P: fluid.get_Z(P, T))
+    if 'Bg' not in df.columns and 'bg' not in df.columns:
+        df['Bg'] = df[col_pressure].apply(lambda P: fluid.get_Bg(P, T))
+
+    col_Z = [c for c in df.columns if c.strip().lower() == 'z'][0]
+    col_Bg = [c for c in df.columns if c.strip().lower() == 'bg'][0]
+
+    x_data = df[col_pressure].values
+
+    interpolators = {
+        'visc': LinearInterpolator(x_data, df[col_viscosity].values),
+        'Z': LinearInterpolator(x_data, df[col_Z].values),
+        'Bg': LinearInterpolator(x_data, df[col_Bg].values)
+    }
+
+    return fluid, interpolators

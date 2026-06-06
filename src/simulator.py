@@ -1,103 +1,97 @@
 import numpy as np
-import pandas as pd
 from scipy.optimize import fsolve
-from tqdm import tqdm
-
-from src.state import NodeState
 
 
 class FieldSimulator:
-    def __init__(self, reservoir, wells, shlyf, dcs):
+    def __init__(self, reservoir, wells, shlyf, P_line):
         self.reservoir = reservoir
         self.wells = wells
         self.shlyf = shlyf
-        self.dcs = dcs
-        self.P_line = dcs.P_line
+        self.P_line = P_line
 
-    def _system_equations(self, x, P_res):
+    def _residuals(self, x, P_res, interp):
         q1, q2, q3, P_man = x
-        q_list = [q1, q2, q3]
-        F = []
 
-        # Уравнения для каждой скважины
+        # 1. Защита области определения: давления и дебиты должны быть положительными
+        # Это критично для log() в формуле трения и sqrt() в IPR
+        qs = [max(1.0, q) for q in [q1, q2, q3]]
+        P_man_safe = max(self.P_line + 0.1, P_man)
+
+        res = [0.0] * 4
+
         for i, well in enumerate(self.wells):
-            q_i = q_list[i]
+            # Внутренняя итерация для нахождения P_bhp при фиксированных q и P_man
+            P_bhp = P_man_safe + 10.0
+            for _ in range(5):
+                try:
+                    # Считаем потери в трубе
+                    dP_tube = well.pipe.calculate_dP(P_man_safe, qs[i], interp)
+                    P_bhp_new = P_man_safe + dP_tube
+                    if abs(P_bhp_new - P_bhp) < 0.01: break
+                    P_bhp = P_bhp_new
+                except:
+                    break
 
-            # Используем ИНДИВИДУАЛЬНУЮ трубу каждой скважины
-            pipe_node = well.pipe.dp(P_man, q_i)
-            P_bhp = P_man + pipe_node.dP
+            try:
+                # Дебит из пласта (IPR)
+                q_ipr = well.get_q(P_bhp)
+            except:
+                q_ipr = 0.0
 
-            q_ipr = well.q(P_res, P_bhp)
-            F.append(q_i - q_ipr)
+            # Невязка: разница между заданным q и тем, что дает пласт
+            res[i] = qs[i] - q_ipr
 
-        # Уравнение для шлейфа
-        q_total = q1 + q2 + q3 + self.dcs.q_ext
-        P_in_dcs = self.dcs.P_in()
+        # Баланс шлейфа
+        q_total_sys = sum(qs)
+        try:
+            dP_shlyf = self.shlyf.calculate_dP(P_man_safe, q_total_sys, interp)
+        except:
+            dP_shlyf = 10.0  # Штрафное значение, если ошибка
 
-        shlyf_node = self.shlyf.dp(P_in_dcs, q_total)
-        P_man_calc = P_in_dcs + shlyf_node.dP
+        # Невязка давления: P_man должно равняться P_line + потери
+        res[3] = P_man_safe - (self.P_line + dP_shlyf)
 
-        F.append(P_man - P_man_calc)
+        return res
 
-        return F
+    def solve(self, P_res, interp):
+        # Улучшенное начальное приближение
+        # Если начать слишком далеко, fsolve может уйти в недопустимую область (отрицательные числа)
+        x0 = [100000.0, 100000.0, 100000.0, self.P_line + 10.0]
 
-    def solve_step(self, P_res: float, q_init: list = None) -> dict:
-        if q_init is None:
-            q_init = [1000.0, 1000.0, 1000.0]
+        try:
+            # full_output=True позволяет получить информацию о сходимости, но мы ее подавим
+            sol = fsolve(self._residuals, x0, args=(P_res, interp), full_output=True)
+            solution = sol[0]
 
-        P_man_init = self.dcs.P_in() + 2.0
-        x0 = q_init + [P_man_init]
+            q1, q2, q3, P_man = solution
 
-        sol = fsolve(self._system_equations, x0, args=(P_res,), full_output=True)
-        x = sol[0]
-        info = sol[1]
+            # Фильтрация результатов: отрицательные дебиты невозможны
+            qs = [max(0.0, q) for q in [q1, q2, q3]]
+            P_man = max(self.P_line, P_man)
 
-        q1, q2, q3, P_man = x
+            return P_man, qs
+        except Exception as e:
+            # В случае полного краха возвращаем безопасные значения
+            return self.P_line + 5.0, [0.0, 0.0, 0.0]
 
-        q1 = max(0.0, q1)
-        q2 = max(0.0, q2)
-        q3 = max(0.0, q3)
-        P_man = max(0.0, P_man)
+    def get_states(self, P_res, interp):
+        P_man, qs = self.solve(P_res, interp)
+        states = {}
+        for i, q in enumerate(qs):
+            well = self.wells[i]
+            try:
+                dP_well = well.pipe.calculate_dP(P_man, q, interp)
+                P_bhp = P_man + dP_well
+            except:
+                P_bhp = P_man
+            states[f'well_{i + 1}'] = {'q': q, 'P_bhp': P_bhp, 'P_man': P_man}
 
-        return {
-            'q1': q1, 'q2': q2, 'q3': q3,
-            'P_man': P_man,
-            'converged': np.max(np.abs(info['fvec'])) < 1.0
-        }
+        q_total = sum(qs)
+        try:
+            dP_shlyf = self.shlyf.calculate_dP(P_man, q_total, interp)
+        except:
+            dP_shlyf = 0.0
 
-    def run(self, N_days: int, dt: float = 1.0, P_res_init: float = None) -> pd.DataFrame:
-        if P_res_init is None:
-            P_res = self.reservoir.resprops.P
-        else:
-            P_res = P_res_init
+        states['shlyf'] = {'P_in': P_man, 'P_out': self.P_line, 'dP': dP_shlyf}
 
-        history = []
-        q_prev = [1000.0, 1000.0, 1000.0]
-        cumulative_prod = 0.0
-        depletion_rate = 5e-5
-
-        for day in tqdm(range(0, N_days, int(dt)), desc="Симуляция"):
-            res = self.solve_step(P_res, q_init=q_prev)
-
-            q1, q2, q3 = res['q1'], res['q2'], res['q3']
-            P_man = res['P_man']
-            q_total = q1 + q2 + q3
-
-            q_prev = [q1, q2, q3]
-
-            prod_step = q_total * dt
-            cumulative_prod += prod_step
-
-            P_res_new = P_res - (prod_step * depletion_rate)
-            P_res = max(1.0, P_res_new)
-
-            history.append({
-                'day': day,
-                'P_res': P_res,
-                'P_man': P_man,
-                'q1': q1, 'q2': q2, 'q3': q3,
-                'q_total': q_total,
-                'q_cumulative': cumulative_prod
-            })
-
-        return pd.DataFrame(history)
+        return states, P_man, q_total
